@@ -87,3 +87,23 @@ func TestParse(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+func TestParseNamesSignerAmongSameKeyCertificates(t *testing.T) {
+	id := newECIdentity(t, "p256", elliptic.P256())
+	renewed := newIdentity(t, "renewed", id.Key)
+	content := []byte("content")
+	for _, pair := range [][2]*testIdentity{{id, renewed}, {renewed, id}} {
+		signer, other := pair[0], pair[1]
+		sig, err := Sign(bytes.NewReader(content), signer.Key, []*x509.Certificate{signer.Cert, other.Cert}, &SignOptions{Detached: true, SignerIdentifier: SubjectKeyID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := Parse(bytes.NewReader(sig))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Signers[0].Certificate; got == nil || !got.Equal(signer.Cert) {
+			t.Fatalf("%s: inspection named %v", signer.Cert.Subject.CommonName, got)
+		}
+	}
+}
