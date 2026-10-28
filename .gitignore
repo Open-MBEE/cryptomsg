@@ -1,0 +1,15 @@
+# Build artifacts
+/bin/
+/build/
+/dist/
+*.test
+*.out
+*.prof
+
+# Fuzzing crashers are reviewed, then either promoted to testdata or deleted.
+testdata/fuzz/*/[0-9a-f]*
+
+# Editors
+/.idea/
+/.vscode/
+*.swp

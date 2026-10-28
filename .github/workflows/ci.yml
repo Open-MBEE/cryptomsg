@@ -1,0 +1,110 @@
+name: CI
+
+# One workflow for pull requests and for pushes to develop and main. Every job is
+# required: formatting and static analysis, the race-enabled test suite on the three
+# desktop platforms, WebAssembly compile checks of the library (js/wasm and
+# wasip1/wasm; the CLI is not built there), and the suite under the Go
+# Cryptographic Module (GOFIPS140).
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [develop, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  STATICCHECK_VERSION: "2026.2.2"
+  GOSEC_VERSION: v2.30.0
+
+jobs:
+  lint:
+    name: Format and static analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt needed on:"; echo "$unformatted"; exit 1
+          fi
+      - name: go mod tidy is a no-op
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+      - name: go vet
+        run: go vet ./...
+      - name: staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION} ./...
+      - name: gosec
+        run: |
+          module_go_version=$(go list -m -f '{{.GoVersion}}')
+          GOSECGOVERSION=$module_go_version go run github.com/securego/gosec/v2/cmd/gosec@${GOSEC_VERSION} -quiet -exclude-generated ./...
+
+  test:
+    name: Test (${{ matrix.os }}, go ${{ matrix.go }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        go: [go.mod]
+        include:
+          - os: ubuntu-latest
+            go: stable
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: ${{ matrix.go == 'go.mod' && 'go.mod' || '' }}
+          go-version: ${{ matrix.go != 'go.mod' && matrix.go || '' }}
+      - name: go build
+        run: go build ./...
+      - name: go test -race
+        run: go test -race -count=1 ./...
+
+  wasm:
+    name: WebAssembly compile (${{ matrix.goos }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [js, wasip1]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+      - name: Build the library packages (not cmd/)
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: wasm
+        run: |
+          pkgs=$(go list ./... | grep -v '/cmd/' || true)
+          echo "$pkgs"
+          go build $pkgs
+          go vet $pkgs
+
+  fips:
+    name: Test under GOFIPS140=latest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+      - name: go test (Go Cryptographic Module)
+        env:
+          GOFIPS140: latest
+        run: |
+          go version
+          go test -count=1 ./...
