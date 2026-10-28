@@ -36,6 +36,20 @@ var plaintext bytes.Buffer
 err = cryptomsg.Decrypt(&plaintext, &envelope, myCert, myKey, nil)
 ```
 
+`Encrypt` buffers the plaintext and `Decrypt` the envelope (GCM authenticates the content as a
+whole and nothing is released before the tag verifies), so peak memory is about twice the
+content size. Interoperability is tested in both directions against OpenSSL 3.5.4 and against
+committed Bouncy Castle 1.80 fixtures.
+
+```text
+$ cryptomsg inspect -in package.cms
+type: AuthEnvelopedData
+content encryption: 2.16.840.1.101.3.4.1.46
+recipients: 2
+  [0] issuer=CN=Example CA serial=4242 key algorithm 1.2.840.113549.1.1.7 (supported)
+  [1] ski=0a1b2c3d key algorithm 1.3.132.1.11.1 (supported)
+```
+
 `Parse` returns a typed view of a CMS object — recipients, algorithms, signer certificates —
 without any key, so a caller can report "encrypted for 3 recipients, signed by CN=…" before
 deciding to decrypt. The `cryptomsg` CLI (`encrypt`, `decrypt`, `sign`, `verify`, `inspect`) is
