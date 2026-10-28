@@ -12,6 +12,7 @@ import (
 	"encoding/asn1"
 	"errors"
 	"fmt"
+	"github.com/Open-MBEE/cryptomsg/internal/ber"
 	"hash"
 	"io"
 	"time"
@@ -101,8 +102,10 @@ func parseSignedData(der []byte) (*signedMessage, error) {
 	return msg, nil
 }
 
-// signerCertificate finds the certificate a SignerInfo names.
-func (msg *signedMessage) signerCertificate(si *signerInfo, extra []*x509.Certificate) (*x509.Certificate, error) {
+// signerCertificates finds every certificate a SignerInfo's sid names: a
+// SubjectKeyIdentifier identifies a key, which renewed certificates share,
+// so the signed ESSCertIDv2 picks among them.
+func (msg *signedMessage) signerCertificates(si *signerInfo, extra []*x509.Certificate) ([]*x509.Certificate, error) {
 	id, err := parseRecipientID(si.Sid, false)
 	if err != nil {
 		return nil, err
@@ -110,14 +113,18 @@ func (msg *signedMessage) signerCertificate(si *signerInfo, extra []*x509.Certif
 	if (id.Kind == SubjectKeyID) != (si.Version == 3) {
 		return nil, malformed("SignerInfo", fmt.Errorf("version %d with %s", si.Version, id.Kind))
 	}
+	var found []*x509.Certificate
 	for _, set := range [][]*x509.Certificate{msg.Certificates, extra} {
 		for _, c := range set {
-			if id.matches(c) {
-				return c, nil
+			if c != nil && id.matches(c) {
+				found = append(found, c)
 			}
 		}
 	}
-	return nil, fmt.Errorf("%w: %s", ErrSignerCertificateMissing, id)
+	if len(found) == 0 {
+		return nil, fmt.Errorf("%w: %s", ErrSignerCertificateMissing, id)
+	}
+	return found, nil
 }
 
 // signedAttributes is the decoded mandatory attribute set.
@@ -138,7 +145,13 @@ func parseSignedAttributes(raw asn1.RawValue) (*signedAttributes, error) {
 	if raw.Class != asn1.ClassContextSpecific || raw.Tag != 0 || !raw.IsCompound {
 		return nil, malformed("signedAttrs", errors.New("unexpected tag"))
 	}
-	setDER, err := asn1.Marshal(asn1.RawValue{Class: asn1.ClassUniversal, Tag: asn1.TagSet, IsCompound: true, Bytes: raw.Bytes})
+	// What was signed is the DER of the SET (RFC 5652 §5.4): members in SET OF
+	// order, whatever order BER input carried them in.
+	members, err := ber.CanonicalSetOf(raw.Bytes)
+	if err != nil {
+		return nil, malformed("signedAttrs", err)
+	}
+	setDER, err := asn1.Marshal(asn1.RawValue{Class: asn1.ClassUniversal, Tag: asn1.TagSet, IsCompound: true, Bytes: members})
 	if err != nil {
 		return nil, malformed("signedAttrs", err)
 	}
@@ -191,10 +204,11 @@ func parseSignedAttributes(raw asn1.RawValue) (*signedAttributes, error) {
 	return out, nil
 }
 
-// checkSigningCertificate requires an ESSCertIDv2 that hashes to the signer
-// certificate (and, when present, names its issuer and serial).
+// checkSigningCertificate requires the first ESSCertIDv2 — RFC 5035 §4 makes
+// it the signer's — to hash to the signer certificate (and, when present,
+// name its issuer and serial).
 func checkSigningCertificate(attrs *signedAttributes, cert *x509.Certificate) error {
-	for _, id := range attrs.signingCert.Certs {
+	for _, id := range attrs.signingCert.Certs[:1] {
 		hashOID := oidSHA256
 		if id.HashAlgorithm.Algorithm != nil {
 			hashOID = id.HashAlgorithm.Algorithm
@@ -250,8 +264,22 @@ func verifySigners(msg *signedMessage, content io.Reader, extra []*x509.Certific
 	hashes := map[string]hash.Hash{}
 	for i := range msg.Signers {
 		si := &msg.Signers[i]
-		cert, err := msg.signerCertificate(si, extra)
+		candidates, err := msg.signerCertificates(si, extra)
 		if err != nil {
+			return nil, err
+		}
+		attrs, err := parseSignedAttributes(si.SignedAttrs)
+		if err != nil {
+			return nil, err
+		}
+		var cert *x509.Certificate
+		for _, c := range candidates {
+			if err = checkSigningCertificate(attrs, c); err == nil {
+				cert = c
+				break
+			}
+		}
+		if cert == nil {
 			return nil, err
 		}
 		suite, err := suiteForPublicKey(cert.PublicKey)
@@ -265,10 +293,6 @@ func verifySigners(msg *signedMessage, content io.Reader, extra []*x509.Certific
 			return nil, malformed("digestAlgorithms", fmt.Errorf("%v not listed", suite.digestOID))
 		}
 		if err := checkSignatureAlgorithm(si.SignatureAlgorithm, suite); err != nil {
-			return nil, err
-		}
-		attrs, err := parseSignedAttributes(si.SignedAttrs)
-		if err != nil {
 			return nil, err
 		}
 		if !attrs.contentType.Equal(msg.ContentType) {
@@ -299,9 +323,6 @@ func verifySigners(msg *signedMessage, content io.Reader, extra []*x509.Certific
 	for _, p := range work {
 		if subtle.ConstantTimeCompare(digests[p.suite.digestOID.String()], p.attrs.messageDigest) != 1 {
 			return nil, fmt.Errorf("%w: message-digest mismatch", ErrSignatureInvalid)
-		}
-		if err := checkSigningCertificate(p.attrs, p.cert); err != nil {
-			return nil, err
 		}
 		if err := verifyBytes(p.cert.PublicKey, p.suite, p.si.SignatureAlgorithm, p.attrs.der, p.si.Signature); err != nil {
 			return nil, err
