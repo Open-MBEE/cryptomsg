@@ -517,7 +517,8 @@ func writeAll(w io.Writer, b []byte) error {
 // present: exactly one content-type attribute, naming the encrypted content
 // type. The attributes are under the authentication tag, so this binds the
 // content type; without them it is unauthenticated and the profile allows
-// only id-data, checked by the caller.
+// only id-data, checked by the caller. A violation is a malformed message —
+// no tag has been checked yet, so it is not an authentication verdict.
 func checkAuthAttrs(attrs asn1.RawValue, contentType asn1.ObjectIdentifier) error {
 	if len(attrs.FullBytes) == 0 {
 		return nil
@@ -543,11 +544,11 @@ func checkAuthAttrs(attrs asn1.RawValue, contentType asn1.ObjectIdentifier) erro
 			return malformed("content-type attribute", err)
 		}
 		if !ct.Equal(contentType) {
-			return fmt.Errorf("%w: content-type attribute %v does not name the encrypted content type %v", ErrAuthenticationFailed, ct, contentType)
+			return malformed("authAttrs", fmt.Errorf("content-type attribute %v does not name the encrypted content type %v", ct, contentType))
 		}
 	}
 	if found != 1 {
-		return fmt.Errorf("%w: %d content-type attributes in authAttrs", ErrAuthenticationFailed, found)
+		return malformed("authAttrs", fmt.Errorf("%d content-type attributes", found))
 	}
 	return nil
 }
