@@ -121,23 +121,21 @@ func (p *Policy) evaluate(signer *x509.Certificate, carried []*x509.Certificate)
 
 // checkRevocation consults the CRLs for every certificate of the chain but
 // the root. A certificate is revoked if any usable CRL from its issuer lists
-// its serial number, whatever the revocation date.
+// its serial number, whatever the revocation date. A CRL past its NextUpdate
+// is not usable unless AllowStaleCRLs; it only matters when no current CRL
+// from the same issuer exists.
 func (p *Policy) checkRevocation(chain []*x509.Certificate, at time.Time) error {
 	for i := 0; i+1 < len(chain); i++ {
 		cert, issuer := chain[i], chain[i+1]
 		covered := false
+		var stale *x509.RevocationList
 		for _, crl := range p.CRLs {
-			if !bytes.Equal(crl.RawIssuer, cert.RawIssuer) {
-				continue
-			}
-			if err := crl.CheckSignatureFrom(issuer); err != nil {
-				continue
-			}
-			if at.Before(crl.ThisUpdate) {
+			if !bytes.Equal(crl.RawIssuer, cert.RawIssuer) || crl.CheckSignatureFrom(issuer) != nil || at.Before(crl.ThisUpdate) {
 				continue
 			}
 			if !p.AllowStaleCRLs && !crl.NextUpdate.IsZero() && at.After(crl.NextUpdate) {
-				return fmt.Errorf("%w: CRL from %s expired %s", ErrUntrustedSigner, issuer.Subject, crl.NextUpdate.UTC().Format(time.RFC3339))
+				stale = crl
+				continue
 			}
 			covered = true
 			for _, entry := range crl.RevokedCertificateEntries {
@@ -145,6 +143,9 @@ func (p *Policy) checkRevocation(chain []*x509.Certificate, at time.Time) error 
 					return fmt.Errorf("%w: certificate %q revoked %s", ErrUntrustedSigner, cert.Subject, entry.RevocationTime.UTC().Format(time.RFC3339))
 				}
 			}
+		}
+		if !covered && stale != nil {
+			return fmt.Errorf("%w: only CRL from %s expired %s", ErrUntrustedSigner, issuer.Subject, stale.NextUpdate.UTC().Format(time.RFC3339))
 		}
 		if p.RequireCRL && !covered {
 			return fmt.Errorf("%w: no CRL covers %q", ErrUntrustedSigner, cert.Subject)

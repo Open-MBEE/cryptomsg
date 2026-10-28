@@ -4,9 +4,19 @@ import (
 	"bytes"
 	"crypto/elliptic"
 	"crypto/x509"
+	"encoding/asn1"
 	"errors"
 	"testing"
 )
+
+func mustMarshalOID(t *testing.T, oid asn1.ObjectIdentifier) []byte {
+	t.Helper()
+	b, err := asn1.Marshal(oid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
 
 func TestParse(t *testing.T) {
 	rsaID := sharedRSAIdentity(t, "rsa")
@@ -44,6 +54,24 @@ func TestParse(t *testing.T) {
 	s := info.Signers[0]
 	if s.Certificate == nil || s.Certificate.Subject.CommonName != "p256" || !s.HasSignedAttributes || !s.SignatureAlgorithm.Equal(oidECDSAWithSHA256) || !s.DigestAlgorithm.Equal(oidSHA256) {
 		t.Fatalf("%+v", s)
+	}
+
+	// Recipients whose parameters Decrypt would refuse are reported unsupported.
+	sha1OAEP := bytes.Replace(env, mustMarshalOID(t, oidSHA256), mustMarshalOID(t, asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 2}), 1)
+	info, err = Parse(bytes.NewReader(sha1OAEP))
+	if err != nil {
+		t.Fatalf("OAEP SHA-384 recipient: %v", err)
+	}
+	if info.Recipients[0].Supported || !info.Recipients[1].Supported {
+		t.Fatalf("OAEP SHA-384 recipient: %+v", info.Recipients)
+	}
+	badKDF := bytes.Replace(env, mustMarshalOID(t, oidDHSinglePassStdDHSHA256KDF), mustMarshalOID(t, asn1.ObjectIdentifier{1, 3, 132, 1, 11, 9}), 1)
+	info, err = Parse(bytes.NewReader(badKDF))
+	if err != nil {
+		t.Fatalf("unknown KDF scheme recipient: %v", err)
+	}
+	if !info.Recipients[0].Supported || info.Recipients[1].Supported {
+		t.Fatalf("unknown KDF scheme recipient: %+v", info.Recipients)
 	}
 
 	// OpenSSL streamed BER fixture, and a non-CMS object.
