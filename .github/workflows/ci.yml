@@ -94,6 +94,24 @@ jobs:
           go build $pkgs
           go vet $pkgs
 
+  fuzz:
+    name: Bounded fuzz pass
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+      - name: Run every Fuzz target for 30 seconds
+        run: |
+          set -euo pipefail
+          for pkg in $(go list ./...); do
+            for target in $(go test -list '^Fuzz' "$pkg" | grep '^Fuzz' || true); do
+              echo "== $pkg $target"
+              go test -run='^$' -fuzz="^${target}\$" -fuzztime=30s "$pkg"
+            done
+          done
+
   fips:
     name: Test under GOFIPS140=latest
     runs-on: ubuntu-latest
