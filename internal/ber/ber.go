@@ -71,6 +71,13 @@ func (e *SyntaxError) Error() string {
 // Unwrap returns the sentinel error.
 func (e *SyntaxError) Unwrap() error { return e.Err }
 
+// Universal tag numbers whose primitive contents DER canonicalises.
+const (
+	tagBoolean    = 1
+	tagInteger    = 2
+	tagEnumerated = 10
+)
+
 // Universal tag numbers whose constructed form DER forbids and whose segments
 // Normalize concatenates.
 const (
@@ -128,6 +135,10 @@ func normalize(out, in []byte, base, depth int) ([]byte, []byte, error) {
 		return nil, nil, err
 	}
 	body := in[h.size:]
+	if h.class == classUniversal && h.tag == 0 {
+		// End-of-contents octets are only consumed by normalizeIndefinite.
+		return nil, nil, &SyntaxError{Offset: base, Err: ErrUnexpectedEOC}
+	}
 
 	if !h.constructed {
 		if h.indefinite {
@@ -136,8 +147,9 @@ func normalize(out, in []byte, base, depth int) ([]byte, []byte, error) {
 		if h.length > len(body) {
 			return nil, nil, &SyntaxError{Offset: base, Err: ErrTruncated}
 		}
-		out = appendHeader(out, h, h.length)
-		out = append(out, body[:h.length]...)
+		content := canonicalPrimitive(h, body[:h.length])
+		out = appendHeader(out, h, len(content))
+		out = append(out, content...)
 		return out, body[h.length:], nil
 	}
 
@@ -160,7 +172,7 @@ func normalize(out, in []byte, base, depth int) ([]byte, []byte, error) {
 	}
 
 	if h.class == classUniversal && isStringTag(h.tag) {
-		content, err := joinSegments(children, h.tag, childBase, true)
+		content, err := joinSegments(children, h.tag, base, true)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -228,11 +240,34 @@ func JoinOctetStrings(content []byte) ([]byte, error) {
 	return joinSegments(content, tagOctetString, 0, false)
 }
 
+// canonicalPrimitive returns the DER contents of a primitive element whose BER
+// contents may differ: BOOLEAN TRUE is always 0xff and INTEGER/ENUMERATED carry
+// no redundant sign octets. Every other value is returned as is.
+func canonicalPrimitive(h header, content []byte) []byte {
+	if h.class != classUniversal {
+		return content
+	}
+	switch h.tag {
+	case tagBoolean:
+		if len(content) == 1 && content[0] != 0 {
+			return []byte{0xff}
+		}
+	case tagInteger, tagEnumerated:
+		for len(content) >= 2 && ((content[0] == 0 && content[1]&0x80 == 0) ||
+			(content[0] == 0xff && content[1]&0x80 != 0)) {
+			content = content[1:]
+		}
+	}
+	return content
+}
+
 // joinSegments concatenates the contents of a constructed string's segments,
 // which after normalisation are primitive elements of the same universal tag.
 // For BIT STRING every segment but the last must have zero unused bits; the
 // result carries the last segment's unused-bits octet. With flat set, the
-// segments must all be primitive, as Normalize leaves them.
+// segments must all be primitive, as Normalize leaves them. segments are
+// already normalised bytes, whose offsets no longer map onto the input, so an
+// error is reported at base, the offset of the enclosing constructed string.
 func joinSegments(segments []byte, tag uint32, base int, flat bool) ([]byte, error) {
 	var content []byte
 	if tag == tagBitString {
@@ -251,7 +286,7 @@ func joinSegments(segments []byte, tag uint32, base int, flat bool) ([]byte, err
 			if flat {
 				return nil, &SyntaxError{Offset: base, Err: ErrConstructedString}
 			}
-			inner, err := joinSegments(seg, tag, base+h.size, false)
+			inner, err := joinSegments(seg, tag, base, false)
 			if err != nil {
 				return nil, err
 			}
@@ -270,7 +305,6 @@ func joinSegments(segments []byte, tag uint32, base int, flat bool) ([]byte, err
 		}
 		content = append(content, seg...)
 		segments = segments[h.size+h.length:]
-		base += h.size + h.length
 	}
 	return content, nil
 }
