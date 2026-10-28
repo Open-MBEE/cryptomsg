@@ -57,7 +57,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	switch {
 	case err == nil:
 		return 0
-	case errors.Is(err, flag.ErrHelp):
+	case errors.Is(err, flag.ErrHelp), errors.Is(err, errFlagParse):
 		return 1
 	case isUsage(err):
 		fmt.Fprintln(stderr, "cryptomsg:", err)
@@ -84,10 +84,25 @@ type multiFlag []string
 func (m *multiFlag) String() string     { return strings.Join(*m, ",") }
 func (m *multiFlag) Set(s string) error { *m = append(*m, s); return nil }
 
+// errFlagParse marks a command line the flag package rejected (it has
+// already printed the reason), so run exits with the usage status.
+var errFlagParse = errors.New("invalid command line")
+
 func newFlagSet(name string, stderr io.Writer) *flag.FlagSet {
 	fs := flag.NewFlagSet("cryptomsg "+name, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	return fs
+}
+
+// parseFlags parses args, classifying any failure as a usage error.
+func parseFlags(fs *flag.FlagSet, args []string) error {
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return err
+		}
+		return errFlagParse
+	}
+	return nil
 }
 
 func openIn(path string, stdin io.Reader) (io.ReadCloser, error) {
@@ -116,7 +131,7 @@ func cmdEncrypt(args []string, stdin io.Reader, stdout, stderr io.Writer) error 
 	keyid := fs.Bool("keyid", false, "name recipients by SubjectKeyIdentifier instead of issuer and serial")
 	in := fs.String("in", "-", "plaintext file ('-' for stdin)")
 	out := fs.String("out", "-", "envelope output file ('-' for stdout)")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if len(recipients) == 0 {
@@ -156,7 +171,7 @@ func cmdDecrypt(args []string, stdin io.Reader, stdout, stderr io.Writer) error 
 	allowCBC := fs.Bool("allow-cbc", false, "accept legacy AES-CBC EnvelopedData (no integrity protection)")
 	in := fs.String("in", "-", "envelope file ('-' for stdin)")
 	out := fs.String("out", "-", "plaintext output file ('-' for stdout)")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if *certPath == "" || *keyPath == "" {
@@ -192,7 +207,7 @@ func cmdSign(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	keyid := fs.Bool("keyid", false, "name the signer by SubjectKeyIdentifier instead of issuer and serial")
 	in := fs.String("in", "-", "content file ('-' for stdin)")
 	out := fs.String("out", "-", "signature output file ('-' for stdout)")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if *certPath == "" || *keyPath == "" {
@@ -246,7 +261,7 @@ func cmdVerify(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	at := fs.String("time", "", "evaluation time, RFC 3339 (default: now)")
 	contentPath := fs.String("content", "", "detached content file")
 	in := fs.String("in", "-", "signature file ('-' for stdin)")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if len(roots) == 0 {
@@ -326,7 +341,7 @@ func cmdVerify(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 func cmdInspect(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	fs := newFlagSet("inspect", stderr)
 	in := fs.String("in", "-", "CMS object file ('-' for stdin)")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	r, err := openIn(*in, stdin)
