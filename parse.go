@@ -107,6 +107,9 @@ func recipientSupported(r *recipientInfo) bool {
 // Parse decodes a CMS object (DER or BER) into its key-free view. It refuses
 // malformed input and content types outside the profile with typed errors
 // and performs no cryptography.
+//
+// The whole object is read into memory; bound untrusted input by wrapping
+// data in an io.LimitReader, a cut-off object is refused as malformed.
 func Parse(data io.Reader) (*Info, error) {
 	raw, err := io.ReadAll(data)
 	if err != nil {

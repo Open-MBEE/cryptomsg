@@ -254,3 +254,23 @@ func TestVerifyEnvelopeSignedWorkflow(t *testing.T) {
 		t.Fatalf("decrypt: %v", err)
 	}
 }
+
+func TestVerifyIgnoresNilPolicyEntries(t *testing.T) {
+	pki := newPKI(t)
+	content := []byte("policy content")
+	sig, err := Sign(bytes.NewReader(content), pki.Leaf.Key, []*x509.Certificate{pki.Leaf.Cert, pki.Intermediate.Cert}, &SignOptions{Detached: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pol := pki.policy()
+	pol.CRLs = []*x509.RevocationList{nil, pki.crl(t, pki.Root, pki.now.Add(-time.Hour)), nil, pki.crl(t, pki.Intermediate, pki.now.Add(-time.Hour))}
+	pol.Certificates = []*x509.Certificate{nil}
+	if _, err := Verify(sig, bytes.NewReader(content), pol); err != nil {
+		t.Fatalf("nil CRL entries: %v", err)
+	}
+	revoking := pki.policy()
+	revoking.CRLs = []*x509.RevocationList{nil, pki.crl(t, pki.Intermediate, pki.now.Add(-time.Hour), pki.Leaf.Cert)}
+	if _, err := Verify(sig, bytes.NewReader(content), revoking); !errors.Is(err, ErrUntrustedSigner) {
+		t.Fatalf("revocation behind a nil entry: %v", err)
+	}
+}

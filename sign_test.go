@@ -3,9 +3,11 @@ package cryptomsg
 import (
 	"bytes"
 	"crypto/elliptic"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/asn1"
 	"errors"
+	"github.com/Open-MBEE/cryptomsg/internal/ber"
 	"io"
 	"testing"
 	"time"
@@ -267,13 +269,18 @@ func TestVerifyAlgorithmSubstitution(t *testing.T) {
 	content := []byte("content")
 	p256 := newECIdentity(t, "p256", elliptic.P256())
 	sig := signBytesHelper(t, content, p256, &SignOptions{Detached: true})
+	// Swap the last occurrence only: that is the SignerInfo's, the earlier
+	// ones sit inside the certificate, whose hash ESSCertIDv2 pins.
 	swap := func(from, to asn1.ObjectIdentifier) []byte {
 		f, _ := asn1.Marshal(from)
 		d, _ := asn1.Marshal(to)
-		if len(f) != len(d) || !bytes.Contains(sig, f) {
+		i := bytes.LastIndex(sig, f)
+		if len(f) != len(d) || i < 0 {
 			t.Fatalf("cannot swap %v for %v", from, to)
 		}
-		return bytes.ReplaceAll(sig, f, d)
+		out := append([]byte{}, sig...)
+		copy(out[i:], d)
+		return out
 	}
 	var ua *UnsupportedAlgorithmError
 	if _, err := verifyHelper(t, swap(oidECDSAWithSHA256, oidECDSAWithSHA384), bytes.NewReader(content)); !errors.As(err, &ua) {
@@ -291,5 +298,82 @@ func TestVerifyAlgorithmSubstitution(t *testing.T) {
 	env := encryptBytes(t, content, nil, p256.Cert)
 	if _, err := verifyHelper(t, env, nil); !errors.Is(err, ErrUnsupportedStructure) {
 		t.Fatalf("envelope as signature: %v", err)
+	}
+}
+
+func TestSignCertificateSetInDEROrder(t *testing.T) {
+	id := newECIdentity(t, "p256", elliptic.P256())
+	a := sharedRSAIdentity(t, "rsa")
+	b := newECIdentity(t, "p384", elliptic.P384())
+	content := []byte("content")
+	var sets [][]byte
+	for _, chain := range [][]*x509.Certificate{{id.Cert, a.Cert, b.Cert}, {id.Cert, b.Cert, a.Cert}} {
+		sig, err := Sign(bytes.NewReader(content), id.Key, chain, &SignOptions{Detached: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ci contentInfo
+		if _, err := asn1.Unmarshal(sig, &ci); err != nil {
+			t.Fatal(err)
+		}
+		var sd signedData
+		if _, err := asn1.Unmarshal(ci.Content.Bytes, &sd); err != nil {
+			t.Fatal(err)
+		}
+		sets = append(sets, sd.Certificates.Bytes)
+		if _, err := verifyHelper(t, sig, bytes.NewReader(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var want []byte
+	for _, r := range ber.SortSetOf([][]byte{id.Cert.Raw, a.Cert.Raw, b.Cert.Raw}) {
+		want = append(want, r...)
+	}
+	for i, got := range sets {
+		if !bytes.Equal(got, want) {
+			t.Fatalf("chain order %d: CertificateSet not in DER order", i)
+		}
+	}
+}
+
+func TestVerifyRenewedCertificateSharingKeyIdentifier(t *testing.T) {
+	// Two certificates with the same key share a SubjectKeyIdentifier; the
+	// signed ESSCertIDv2 picks the signer among them whichever comes first.
+	id := newECIdentity(t, "p256", elliptic.P256())
+	renewed := newIdentity(t, "renewed", id.Key)
+	if !bytes.Equal(id.Cert.SubjectKeyId, renewed.Cert.SubjectKeyId) {
+		t.Fatal("test setup: key identifiers differ")
+	}
+	content := []byte("content")
+	for _, pair := range [][2]*testIdentity{{id, renewed}, {renewed, id}} {
+		signer, other := pair[0], pair[1]
+		sig, err := Sign(bytes.NewReader(content), signer.Key, []*x509.Certificate{signer.Cert, other.Cert}, &SignOptions{Detached: true, SignerIdentifier: SubjectKeyID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := verifyHelper(t, sig, bytes.NewReader(content))
+		if err != nil {
+			t.Fatalf("%s: %v", signer.Cert.Subject.CommonName, err)
+		}
+		if !got[0].Signer.Equal(signer.Cert) {
+			t.Fatalf("%s: verified against %q", signer.Cert.Subject.CommonName, got[0].Signer.Subject.CommonName)
+		}
+	}
+}
+
+func TestCheckSigningCertificateUsesFirstEntry(t *testing.T) {
+	id := newECIdentity(t, "p256", elliptic.P256())
+	twin := newIdentity(t, "twin", id.Key)
+	hashOf := func(c *x509.Certificate) []byte {
+		h := sha256.Sum256(c.Raw)
+		return h[:]
+	}
+	attrs := &signedAttributes{signingCert: signingCertificateV2{Certs: []essCertIDv2{{CertHash: hashOf(twin.Cert)}, {CertHash: hashOf(id.Cert)}}}}
+	if err := checkSigningCertificate(attrs, id.Cert); !errors.Is(err, ErrSignatureInvalid) {
+		t.Fatalf("signer named second: %v", err)
+	}
+	attrs.signingCert.Certs[0], attrs.signingCert.Certs[1] = attrs.signingCert.Certs[1], attrs.signingCert.Certs[0]
+	if err := checkSigningCertificate(attrs, id.Cert); err != nil {
+		t.Fatalf("signer named first: %v", err)
 	}
 }
