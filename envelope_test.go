@@ -1,6 +1,10 @@
 package cryptomsg
 
 import (
+	"io"
+	"math"
+	"strings"
+
 	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -9,6 +13,7 @@ import (
 	"crypto/x509"
 	"encoding/asn1"
 	"errors"
+	"github.com/Open-MBEE/cryptomsg/internal/ber"
 	"testing"
 )
 
@@ -342,6 +347,134 @@ func TestUnpadPKCS7(t *testing.T) {
 	for _, b := range bad {
 		if _, err := unpadPKCS7(b); err == nil {
 			t.Errorf("%x accepted", b)
+		}
+	}
+}
+
+type shortWriter struct{ bytes.Buffer }
+
+func (w *shortWriter) Write(p []byte) (int, error) {
+	n, _ := w.Buffer.Write(p[:len(p)/2])
+	return n, nil
+}
+
+func TestShortWritesAreErrors(t *testing.T) {
+	id := newECIdentity(t, "p256", elliptic.P256())
+	var sw shortWriter
+	if err := Encrypt(&sw, bytes.NewReader([]byte("payload")), []*x509.Certificate{id.Cert}, nil); !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	env := encryptBytes(t, []byte("payload"), nil, id.Cert)
+	sw.Reset()
+	if err := Decrypt(&sw, bytes.NewReader(env), id.Cert, id.Key, nil); !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("Decrypt: %v", err)
+	}
+}
+
+func TestDecryptMaxSizeAtMaxInt64(t *testing.T) {
+	id := newECIdentity(t, "p256", elliptic.P256())
+	plaintext := []byte("payload")
+	env := encryptBytes(t, plaintext, nil, id.Cert)
+	if got, err := decryptBytes(t, env, id, &DecryptOptions{MaxSize: math.MaxInt64}); err != nil || !bytes.Equal(got, plaintext) {
+		t.Fatalf("MaxSize MaxInt64: %v", err)
+	}
+}
+
+func TestDecryptRefusesNonDataContentType(t *testing.T) {
+	id := newECIdentity(t, "p256", elliptic.P256())
+	env := encryptBytes(t, []byte("payload"), nil, id.Cert)
+	from, _ := asn1.Marshal(oidData)
+	to, _ := asn1.Marshal(oidSignedData)
+	bad := bytes.Replace(env, from, to, 1)
+	if bytes.Equal(bad, env) {
+		t.Fatal("id-data not found in envelope")
+	}
+	if _, err := decryptBytes(t, bad, id, nil); !errors.Is(err, ErrUnsupportedStructure) {
+		t.Fatalf("got %v, want ErrUnsupportedStructure", err)
+	}
+}
+
+// withAuthAttrs re-encodes an AuthEnvelopedData with the given authAttrs
+// members (concatenated DER Attribute values).
+func withAuthAttrs(t *testing.T, env, members []byte) []byte {
+	t.Helper()
+	var ci struct {
+		ContentType asn1.ObjectIdentifier
+		Content     asn1.RawValue `asn1:"explicit,tag:0"`
+	}
+	if _, err := asn1.Unmarshal(env, &ci); err != nil {
+		t.Fatal(err)
+	}
+	var aed authEnvelopedData
+	if _, err := asn1.Unmarshal(ci.Content.Bytes, &aed); err != nil {
+		t.Fatal(err)
+	}
+	aed.AuthAttrs = asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 1, IsCompound: true, Bytes: members}
+	body, err := asn1.Marshal(aed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := encodeContentInfo(oidAuthEnvelopedData, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func attributeDER(t *testing.T, typ asn1.ObjectIdentifier, value any) []byte {
+	t.Helper()
+	v, err := asn1.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := asn1.Marshal(struct {
+		Type   asn1.ObjectIdentifier
+		Values asn1.RawValue
+	}{typ, asn1.RawValue{Class: asn1.ClassUniversal, Tag: asn1.TagSet, IsCompound: true, Bytes: v}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func TestDecryptAuthAttrsContentType(t *testing.T) {
+	id := newECIdentity(t, "p256", elliptic.P256())
+	env := encryptBytes(t, []byte("payload"), nil, id.Cert)
+	other := asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 5}
+	cases := []struct {
+		name    string
+		members []byte
+		want    string
+	}{
+		{"wrong content type", attributeDER(t, oidAttrContentType, oidSignedData), "does not name"},
+		{"no content type", attributeDER(t, other, []byte{1}), "0 content-type attributes"},
+		{"two content types", append(attributeDER(t, oidAttrContentType, oidData), attributeDER(t, oidAttrContentType, oidData)...), "2 content-type attributes"},
+		// Well-formed attributes pass the check; the tag then fails because
+		// the message was not sealed over them.
+		{"unauthenticated attributes", attributeDER(t, oidAttrContentType, oidData), "cryptomsg: authentication failed"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := decryptBytes(t, withAuthAttrs(t, env, c.members), id, nil)
+			if !errors.Is(err, ErrAuthenticationFailed) || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("got %v, want ErrAuthenticationFailed mentioning %q", err, c.want)
+			}
+		})
+	}
+}
+
+func TestAuthAttrsAADIsSorted(t *testing.T) {
+	a := attributeDER(t, oidAttrContentType, oidData)
+	b := attributeDER(t, asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 5}, []byte{1})
+	sorted := make([]byte, 0, len(a)+len(b))
+	for _, e := range ber.SortSetOf([][]byte{a, b}) {
+		sorted = append(sorted, e...)
+	}
+	want, _ := asn1.Marshal(asn1.RawValue{Class: asn1.ClassUniversal, Tag: asn1.TagSet, IsCompound: true, Bytes: sorted})
+	for _, members := range [][]byte{append(append([]byte{}, a...), b...), append(append([]byte{}, b...), a...)} {
+		got, err := authAttrsAAD(asn1.RawValue{FullBytes: []byte{0xa1}, Bytes: members})
+		if err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("AAD not in SET OF order: %x %v", got, err)
 		}
 	}
 }

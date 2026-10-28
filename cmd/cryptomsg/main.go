@@ -102,6 +102,9 @@ func parseFlags(fs *flag.FlagSet, args []string) error {
 		}
 		return errFlagParse
 	}
+	if len(fs.Args()) != 0 {
+		return usagef("unexpected arguments: %s", strings.Join(fs.Args(), " "))
+	}
 	return nil
 }
 
@@ -109,14 +112,22 @@ func openIn(path string, stdin io.Reader) (io.ReadCloser, error) {
 	if path == "" || path == "-" {
 		return io.NopCloser(stdin), nil
 	}
-	return os.Open(path) // #nosec G304 -- the path is the operator's own command-line argument
+	f, err := os.Open(path) // #nosec G304 -- the path is the operator's own command-line argument
+	if err != nil {
+		return nil, usageError{err}
+	}
+	return f, nil
 }
 
 func openOut(path string, stdout io.Writer) (io.WriteCloser, error) {
 	if path == "" || path == "-" {
 		return nopWriteCloser{stdout}, nil
 	}
-	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) // #nosec G304 -- operator's argument
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) // #nosec G304 -- operator's argument
+	if err != nil {
+		return nil, usageError{err}
+	}
+	return f, nil
 }
 
 type nopWriteCloser struct{ io.Writer }
@@ -318,7 +329,7 @@ func cmdVerify(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 	var content io.Reader
 	if *contentPath != "" {
-		f, err := os.Open(*contentPath)
+		f, err := openIn(*contentPath, stdin)
 		if err != nil {
 			return err
 		}
@@ -402,7 +413,7 @@ func writeOut(path string, stdout io.Writer, data []byte) error {
 func pemOrDER(path string, types ...string) ([][]byte, error) {
 	data, err := os.ReadFile(path) // #nosec G304 -- the path is the operator's own command-line argument
 	if err != nil {
-		return nil, err
+		return nil, usageError{err}
 	}
 	if !bytes.Contains(data, []byte("-----BEGIN")) {
 		return [][]byte{data}, nil
