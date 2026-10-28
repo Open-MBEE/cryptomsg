@@ -137,4 +137,15 @@ func TestCLI(t *testing.T) {
 	exec(1, "verify", "-no-such-flag")
 	exec(1, "bogus")
 	exec(1)
+	// Stray arguments and unreadable operator inputs are usage errors too.
+	exec(1, "verify", "-root", ca.cert, "-content", envelope, "-in", sig, "stray")
+	exec(1, "sign", "-cert", signer.cert, "-key", filepath.Join(dir, "missing.key"), "-in", plain, "-out", sig)
+	exec(1, "verify", "-root", filepath.Join(dir, "missing.pem"), "-content", envelope, "-in", sig)
+	exec(1, "decrypt", "-cert", rsaID.cert, "-key", rsaID.key, "-in", filepath.Join(dir, "missing.der"))
+	// Detached content from standard input.
+	envBytes, _ := os.ReadFile(envelope)
+	var out, errb bytes.Buffer
+	if code := run([]string{"verify", "-root", ca.cert, "-content", "-", "-in", sig, "-eku", "emailProtection"}, bytes.NewReader(envBytes), &out, &errb); code != 0 {
+		t.Fatalf("-content -: exit %d\n%s", code, errb.String())
+	}
 }
