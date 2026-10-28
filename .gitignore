@@ -1,0 +1,12 @@
+# Build artifacts
+/bin/
+/build/
+/dist/
+*.test
+*.out
+*.prof
+
+# Editors
+/.idea/
+/.vscode/
+*.swp
