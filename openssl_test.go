@@ -89,7 +89,7 @@ func TestOpenSSLDecryptsOurOutput(t *testing.T) {
 			for _, r := range recipients {
 				t.Run(cipher.String()+"/"+rid.String()+"/"+r.name, func(t *testing.T) {
 					certPath, keyPath := r.id.writePEM(t, dir, r.name)
-					got := openssl(t, bin, "cms", "-decrypt", "-inform", "DER", "-in", envPath, "-recip", certPath, "-inkey", keyPath)
+					got := openssl(t, bin, "cms", "-decrypt", "-binary", "-inform", "DER", "-in", envPath, "-recip", certPath, "-inkey", keyPath)
 					if !bytes.Equal(got, plaintext) {
 						t.Fatalf("openssl recovered %d bytes, want %d", len(got), len(plaintext))
 					}
