@@ -133,6 +133,8 @@ func TestCLI(t *testing.T) {
 	exec(1, "decrypt", "-in", envelope)
 	exec(1, "verify", "-in", sig)
 	exec(1, "verify", "-root", ca.cert, "-in", sig, "-eku", "bogus")
+	exec(1, "encrypt", "-recipient")
+	exec(1, "verify", "-no-such-flag")
 	exec(1, "bogus")
 	exec(1)
 }
