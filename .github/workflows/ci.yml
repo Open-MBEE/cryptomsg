@@ -123,14 +123,7 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
-      - name: Cache the OpenSSL build
-        id: cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ~/openssl
-          key: openssl-${{ env.OPENSSL_VERSION }}-${{ runner.os }}-${{ runner.arch }}
       - name: Build the pinned OpenSSL
-        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           curl -fsSL -o openssl.tar.gz "https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/openssl-${OPENSSL_VERSION}.tar.gz"
@@ -144,9 +137,10 @@ jobs:
         env:
           CRYPTOMSG_REQUIRE_OPENSSL: "1"
         run: |
+          set -euo pipefail
           export CRYPTOMSG_OPENSSL="$HOME/openssl/bin/openssl" LD_LIBRARY_PATH="$HOME/openssl/lib"
           "$CRYPTOMSG_OPENSSL" version
-          go test -count=1 -run 'OpenSSL' -v ./... 2>&1 | grep -E '^(=== RUN|--- (PASS|FAIL|SKIP)|ok|FAIL|PASS)' | grep -v '=== RUN'
+          go test -count=1 -run 'OpenSSL' -v ./... 2>&1 | grep -E '^(--- (PASS|FAIL|SKIP)|ok|FAIL|PASS)'
 
   fips:
     name: Test under GOFIPS140=latest
