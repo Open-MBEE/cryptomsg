@@ -39,7 +39,8 @@ err = cryptomsg.Decrypt(&plaintext, &envelope, myCert, myKey, nil)
 `Encrypt` buffers the plaintext and `Decrypt` the envelope (GCM authenticates the content as a
 whole and nothing is released before the tag verifies), so peak memory is about twice the
 content size. Interoperability is tested in both directions against OpenSSL 3.5.4 and against
-committed Bouncy Castle 1.80 fixtures.
+committed Bouncy Castle 1.80 fixtures. `DecryptOptions.MaxSize` bounds how much of an untrusted envelope is read before
+parsing; zero (the default) leaves it unbounded.
 
 ```text
 $ cryptomsg inspect -in package.cms

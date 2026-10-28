@@ -34,6 +34,11 @@ decrypt-only: AES-GCM inside it is refused as malformed, AES-CBC with PKCS#7 pad
 under `DecryptOptions.AllowCBC` for legacy producers and documented as unauthenticated (the
 caller must verify a signature over the envelope before trusting the plaintext).
 
+On decrypt, GCM parameters are accepted in the shapes `crypto/cipher` can build: the 96-bit nonce
+with a 12–16 byte tag, or a 7–128 byte nonce with the full 16-byte tag. Any other pair (for
+example an 8-byte nonce with a 12-byte tag) is refused as malformed parameters before any key
+material is used.
+
 One `RecipientInfo` per recipient certificate, chosen by key type:
 
 - RSA → `KeyTransRecipientInfo`, RSAES-OAEP with SHA-256 and MGF1-SHA-256, empty label, keys
