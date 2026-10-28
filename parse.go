@@ -80,6 +80,30 @@ type SignerInfo struct {
 	HasSignedAttributes bool
 }
 
+// recipientSupported reports whether Decrypt would accept the RecipientInfo's
+// algorithms and parameters, judged without any key.
+func recipientSupported(r *recipientInfo) bool {
+	switch {
+	case r.ktri != nil:
+		return checkOAEPParams(r.ktri.KeyEncryptionAlgorithm) == nil
+	case r.kari != nil:
+		known := false
+		for i := range ecdhSuites {
+			known = known || r.kari.KeyEncryptionAlgorithm.Algorithm.Equal(ecdhSuites[i].schemeOID)
+		}
+		if !known {
+			return false
+		}
+		var wrapAlg algorithmIdentifier
+		if rest, err := asn1.Unmarshal(r.kari.KeyEncryptionAlgorithm.Parameters.FullBytes, &wrapAlg); err != nil || len(rest) != 0 {
+			return false
+		}
+		_, err := kekLenForWrap(wrapAlg.Algorithm)
+		return err == nil
+	}
+	return false
+}
+
 // Parse decodes a CMS object (DER or BER) into its key-free view. It refuses
 // malformed input and content types outside the profile with typed errors
 // and performs no cryptography.
@@ -114,7 +138,7 @@ func Parse(data io.Reader) (*Info, error) {
 				Identifier:   r.ID.Kind,
 				Description:  r.ID.String(),
 				KeyAlgorithm: r.Alg,
-				Supported:    r.ktri != nil || r.kari != nil,
+				Supported:    recipientSupported(&r),
 			})
 		}
 		return info, nil
