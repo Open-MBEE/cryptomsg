@@ -113,7 +113,7 @@ jobs:
           done
 
   openssl-interop:
-    name: OpenSSL ${{ env.OPENSSL_VERSION }} interop
+    name: OpenSSL 3.5.4 interop
     runs-on: ubuntu-latest
     env:
       OPENSSL_VERSION: 3.5.4
