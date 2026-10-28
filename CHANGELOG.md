@@ -9,6 +9,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Interoperability suite: OpenSSL 3.5.4 (pinned, built in CI) in both directions for every
+  profile row, and committed Bouncy Castle 1.80 fixtures with their generator.
 - `cryptomsg` command (`encrypt`, `decrypt`, `sign`, `verify`, `inspect`), a thin wrapper over
   the library for publishers and interoperability testing.
 - `Verify` with an offline `Policy` (caller-supplied trust anchors, intermediates, CRLs,

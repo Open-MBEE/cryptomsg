@@ -112,6 +112,42 @@ jobs:
             done
           done
 
+  openssl-interop:
+    name: OpenSSL ${{ env.OPENSSL_VERSION }} interop
+    runs-on: ubuntu-latest
+    env:
+      OPENSSL_VERSION: 3.5.4
+      OPENSSL_SHA256: 967311f84955316969bdb1d8d4b983718ef42338639c621ec4c34fddef355e99
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+      - name: Cache the OpenSSL build
+        id: cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/openssl
+          key: openssl-${{ env.OPENSSL_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+      - name: Build the pinned OpenSSL
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          curl -fsSL -o openssl.tar.gz "https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/openssl-${OPENSSL_VERSION}.tar.gz"
+          echo "${OPENSSL_SHA256}  openssl.tar.gz" | sha256sum -c -
+          tar xzf openssl.tar.gz
+          cd "openssl-${OPENSSL_VERSION}"
+          ./Configure --prefix="$HOME/openssl" --libdir=lib no-tests no-docs >/dev/null
+          make -j"$(nproc)" >/dev/null
+          make install_sw >/dev/null
+      - name: Interop tests, both directions
+        env:
+          CRYPTOMSG_REQUIRE_OPENSSL: "1"
+        run: |
+          export CRYPTOMSG_OPENSSL="$HOME/openssl/bin/openssl" LD_LIBRARY_PATH="$HOME/openssl/lib"
+          "$CRYPTOMSG_OPENSSL" version
+          go test -count=1 -run 'OpenSSL' -v ./... 2>&1 | grep -E '^(=== RUN|--- (PASS|FAIL|SKIP)|ok|FAIL|PASS)' | grep -v '=== RUN'
+
   fips:
     name: Test under GOFIPS140=latest
     runs-on: ubuntu-latest
