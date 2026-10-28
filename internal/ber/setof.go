@@ -33,3 +33,27 @@ func compareSetOf(a, b []byte) int {
 	}
 	return 0
 }
+
+// CanonicalSetOf returns the contents of a SET OF, given as concatenated DER
+// elements, with the elements in DER order.
+func CanonicalSetOf(content []byte) ([]byte, error) {
+	var elements [][]byte
+	for off := 0; off < len(content); {
+		h, err := readHeader(content[off:], off)
+		if err != nil {
+			return nil, err
+		}
+		if h.indefinite || h.length > len(content)-off-h.size {
+			return nil, &SyntaxError{Offset: off, Err: ErrTruncated}
+		}
+		end := off + h.size + h.length
+		elements = append(elements, content[off:end])
+		off = end
+	}
+	SortSetOf(elements)
+	out := make([]byte, 0, len(content))
+	for _, e := range elements {
+		out = append(out, e...)
+	}
+	return out, nil
+}

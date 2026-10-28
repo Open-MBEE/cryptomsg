@@ -9,6 +9,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `Encrypt` and `Decrypt`: AuthEnvelopedData with AES-128/256-GCM for RSA (RSA-OAEP SHA-256,
+  ≥ 2048 bits) and EC (ephemeral-static ECDH on P-256/P-384, X9.63 KDF, RFC 3394 AES key
+  wrap) recipients named by IssuerAndSerialNumber or SubjectKeyIdentifier; EnvelopedData with
+  AES-CBC accepted on decrypt behind `DecryptOptions.AllowCBC`.
+- BER→DER normaliser accepting the indefinite-length output of a streaming `openssl cms`.
 - Repository scaffold: module `github.com/Open-MBEE/cryptomsg`, Apache-2.0 licence, CI
   (gofmt, go vet, staticcheck, gosec, `go test -race` on Linux/macOS/Windows, js/wasm and
   wasip1/wasm compile checks, `GOFIPS140=latest`), security policy and FIPS status note.
