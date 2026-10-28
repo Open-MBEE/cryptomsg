@@ -200,6 +200,17 @@ func TestVerifyPolicy(t *testing.T) {
 		if _, err := Verify(sig, bytes.NewReader(content), pol); err != nil {
 			t.Fatalf("stale CRL allowed: %v", err)
 		}
+		// A stale CRL listed before a current one does not block it, and a
+		// current one revoking the leaf still wins over a stale clean one.
+		pol.AllowStaleCRLs = false
+		pol.CRLs = []*x509.RevocationList{pki.crl(t, pki.Intermediate, pki.now.Add(-30*24*time.Hour)), goodCRLs[0], goodCRLs[1]}
+		if _, err := Verify(sig, bytes.NewReader(content), pol); err != nil {
+			t.Fatalf("stale then current CRL: %v", err)
+		}
+		pol.CRLs = []*x509.RevocationList{pki.crl(t, pki.Intermediate, pki.now.Add(-30*24*time.Hour)), goodCRLs[0], pki.crl(t, pki.Intermediate, pki.now.Add(-time.Hour), pki.Leaf.Cert)}
+		if _, err := Verify(sig, bytes.NewReader(content), pol); !errors.Is(err, ErrUntrustedSigner) {
+			t.Fatalf("stale clean then current revoking CRL: %v", err)
+		}
 		// RequireCRL with no CRL for the leaf.
 		pol.AllowStaleCRLs = false
 		pol.CRLs = goodCRLs[:1]
