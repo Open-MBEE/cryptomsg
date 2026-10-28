@@ -195,12 +195,18 @@ func Sign(content io.Reader, signer crypto.Signer, chain []*x509.Certificate, op
 		version = 3
 	}
 
-	var certSet []byte
+	// CertificateSet is a SET OF: DER orders its members by encoding, not by
+	// the chain order the caller gave.
+	raws := make([][]byte, 0, len(chain))
 	for _, c := range chain {
 		if c == nil {
 			return nil, errors.New("cryptomsg: nil certificate in chain")
 		}
-		certSet = append(certSet, c.Raw...)
+		raws = append(raws, c.Raw)
+	}
+	var certSet []byte
+	for _, r := range ber.SortSetOf(raws) {
+		certSet = append(certSet, r...)
 	}
 	eci := encapsulatedContentInfo{EContentType: contentType}
 	if !opts.Detached {

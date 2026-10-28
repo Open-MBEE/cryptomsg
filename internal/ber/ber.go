@@ -101,6 +101,11 @@ const classUniversal = 0
 // Normalize converts a single BER-encoded element to its DER encoding. Input
 // that is already DER comes back byte-identical. Every element must lie
 // within the input and nothing may follow the top-level element.
+//
+// One DER rule is schema-dependent and so left to the caller: the members of
+// a SET OF are kept in input order, because without the schema a SET OF
+// (ordered by encoding) cannot be told from a SET (ordered by tag). Callers
+// that re-encode a SET OF for digesting use CanonicalSetOf.
 func Normalize(in []byte) ([]byte, error) {
 	out := make([]byte, 0, len(in))
 	out, rest, err := normalize(out, in, 0, 0)

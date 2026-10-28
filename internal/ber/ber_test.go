@@ -313,3 +313,16 @@ func TestConstructedStringErrorOffsetInRange(t *testing.T) {
 		t.Fatalf("offset %d, want 0 (the enclosing BIT STRING)", se.Offset)
 	}
 }
+
+func TestCanonicalSetOf(t *testing.T) {
+	got, err := CanonicalSetOf(mustHex(t, "020102020101"))
+	if err != nil || hex.EncodeToString(got) != "020101020102" {
+		t.Fatalf("got %x %v", got, err)
+	}
+	if _, err := CanonicalSetOf(mustHex(t, "02010202")); !errors.Is(err, ErrTruncated) {
+		t.Fatalf("truncated: %v", err)
+	}
+	if _, err := CanonicalSetOf(mustHex(t, "30800000")); !errors.Is(err, ErrTruncated) {
+		t.Fatalf("indefinite: %v", err)
+	}
+}

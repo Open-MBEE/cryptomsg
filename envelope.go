@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 
 	"github.com/Open-MBEE/cryptomsg/internal/ber"
 )
@@ -171,8 +172,7 @@ func Encrypt(w io.Writer, plaintext io.Reader, recipients []*x509.Certificate, o
 	if err != nil {
 		return err
 	}
-	_, err = w.Write(out)
-	return err
+	return writeAll(w, out)
 }
 
 // encodeContentInfo wraps a DER content in ContentInfo under its type. The
@@ -248,6 +248,12 @@ func parseEnvelope(der []byte) (*envelope, error) {
 	}
 	env.ContentType = eci.ContentType
 	env.Cipher = eci.ContentEncryptionAlgorithm
+	if !env.ContentType.Equal(oidData) {
+		return nil, fmt.Errorf("%w: encrypted content type %v", ErrUnsupportedStructure, env.ContentType)
+	}
+	if err := checkAuthAttrs(env.AuthAttrs, env.ContentType); err != nil {
+		return nil, err
+	}
 	if len(eci.EncryptedContent.FullBytes) == 0 {
 		return nil, malformed("EncryptedContentInfo", fmt.Errorf("encryptedContent %w", errAbsent))
 	}
@@ -339,7 +345,11 @@ func Decrypt(w io.Writer, envelope io.Reader, cert *x509.Certificate, key crypto
 	var raw []byte
 	var err error
 	if opts.MaxSize > 0 {
-		raw, err = io.ReadAll(io.LimitReader(envelope, opts.MaxSize+1))
+		limit := opts.MaxSize
+		if limit < math.MaxInt64 {
+			limit++ // one byte past the bound tells an oversized input apart
+		}
+		raw, err = io.ReadAll(io.LimitReader(envelope, limit))
 		if err == nil && int64(len(raw)) > opts.MaxSize {
 			return malformed("envelope", fmt.Errorf("larger than %d bytes", opts.MaxSize))
 		}
@@ -393,8 +403,7 @@ func Decrypt(w io.Writer, envelope io.Reader, cert *x509.Certificate, key crypto
 	if err != nil {
 		return err
 	}
-	_, err = w.Write(plaintext)
-	return err
+	return writeAll(w, plaintext)
 }
 
 // decryptContent decrypts and, for GCM, authenticates the content with cek.
@@ -492,13 +501,69 @@ func newGCM(block cipher.Block, nonceLen, tagLen int) (cipher.AEAD, error) {
 	return cipher.NewGCMWithNonceSize(block, nonceLen)
 }
 
+// writeAll writes b to w in full, treating a short count as io.ErrShortWrite.
+func writeAll(w io.Writer, b []byte) error {
+	n, err := w.Write(b)
+	if err != nil {
+		return err
+	}
+	if n != len(b) {
+		return io.ErrShortWrite
+	}
+	return nil
+}
+
+// checkAuthAttrs enforces RFC 5083 §2.1 on the authenticated attributes when
+// present: exactly one content-type attribute, naming the encrypted content
+// type. The attributes are under the authentication tag, so this binds the
+// content type; without them it is unauthenticated and the profile allows
+// only id-data, checked by the caller.
+func checkAuthAttrs(attrs asn1.RawValue, contentType asn1.ObjectIdentifier) error {
+	if len(attrs.FullBytes) == 0 {
+		return nil
+	}
+	var found int
+	rest := attrs.Bytes
+	for len(rest) > 0 {
+		var attr struct {
+			Type   asn1.ObjectIdentifier
+			Values asn1.RawValue `asn1:"set"`
+		}
+		var err error
+		rest, err = asn1.Unmarshal(rest, &attr)
+		if err != nil {
+			return malformed("authAttrs", err)
+		}
+		if !attr.Type.Equal(oidAttrContentType) {
+			continue
+		}
+		found++
+		var ct asn1.ObjectIdentifier
+		if tail, err := asn1.Unmarshal(attr.Values.Bytes, &ct); err != nil || len(tail) != 0 {
+			return malformed("content-type attribute", err)
+		}
+		if !ct.Equal(contentType) {
+			return fmt.Errorf("%w: content-type attribute %v does not name the encrypted content type %v", ErrAuthenticationFailed, ct, contentType)
+		}
+	}
+	if found != 1 {
+		return fmt.Errorf("%w: %d content-type attributes in authAttrs", ErrAuthenticationFailed, found)
+	}
+	return nil
+}
+
 // authAttrsAAD returns the additional authenticated data of RFC 5083 §2.2:
-// the DER of the authAttrs as a SET (universal tag), or nil when absent.
+// the DER of the authAttrs as a SET (universal tag), or nil when absent. The
+// members are put in DER SET OF order, which BER input need not keep.
 func authAttrsAAD(attrs asn1.RawValue) ([]byte, error) {
 	if len(attrs.FullBytes) == 0 {
 		return nil, nil
 	}
-	return asn1.Marshal(asn1.RawValue{Class: asn1.ClassUniversal, Tag: asn1.TagSet, IsCompound: true, Bytes: attrs.Bytes})
+	members, err := ber.CanonicalSetOf(attrs.Bytes)
+	if err != nil {
+		return nil, malformed("authAttrs", err)
+	}
+	return asn1.Marshal(asn1.RawValue{Class: asn1.ClassUniversal, Tag: asn1.TagSet, IsCompound: true, Bytes: members})
 }
 
 // unpadPKCS7 removes the padding of RFC 5652 §6.3 after a CBC decryption.
