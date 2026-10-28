@@ -130,6 +130,30 @@ func TestEncryptRefusals(t *testing.T) {
 	}
 }
 
+func TestDecryptDuplicateRecipientAndMaxSize(t *testing.T) {
+	id := newECIdentity(t, "p256", elliptic.P256())
+	plaintext := []byte("payload")
+	// The same certificate twice: the first entry is spoiled (unknown KDF
+	// scheme), the second must still decrypt.
+	env := encryptBytes(t, plaintext, nil, id.Cert, id.Cert)
+	from, _ := asn1.Marshal(oidDHSinglePassStdDHSHA256KDF)
+	to, _ := asn1.Marshal(asn1.ObjectIdentifier{1, 3, 132, 1, 11, 9})
+	bad := bytes.Replace(env, from, to, 1)
+	if got, err := decryptBytes(t, bad, id, nil); err != nil || !bytes.Equal(got, plaintext) {
+		t.Fatalf("second RecipientInfo not used: %v", err)
+	}
+	both := bytes.ReplaceAll(env, from, to)
+	if _, err := decryptBytes(t, both, id, nil); !errors.Is(err, ErrUnsupportedAlgorithm) {
+		t.Fatalf("both spoiled: %v", err)
+	}
+	if _, err := decryptBytes(t, env, id, &DecryptOptions{MaxSize: int64(len(env)) - 1}); !errors.Is(err, ErrMalformed) {
+		t.Fatalf("MaxSize: %v", err)
+	}
+	if got, err := decryptBytes(t, env, id, &DecryptOptions{MaxSize: int64(len(env))}); err != nil || !bytes.Equal(got, plaintext) {
+		t.Fatalf("MaxSize exact: %v", err)
+	}
+}
+
 func TestDecryptWrongRecipient(t *testing.T) {
 	a := newECIdentity(t, "a", elliptic.P256())
 	b := newECIdentity(t, "b", elliptic.P256())
