@@ -108,7 +108,7 @@ func Normalize(in []byte) ([]byte, error) {
 
 // header is the decoded identifier and length octets of one element.
 type header struct {
-	class       int
+	class       byte
 	constructed bool
 	tag         uint32
 	indefinite  bool
@@ -293,7 +293,7 @@ func readHeader(in []byte, base int) (header, error) {
 		return h, &SyntaxError{Offset: base, Err: ErrTruncated}
 	}
 	b := in[0]
-	h.class = int(b >> 6)
+	h.class = b >> 6
 	h.constructed = b&0x20 != 0
 	i := 1
 	if b&0x1f != 0x1f {
@@ -362,7 +362,7 @@ func readHeader(in []byte, base int) (header, error) {
 
 // appendHeader appends the DER identifier and definite minimal length octets.
 func appendHeader(out []byte, h header, length int) []byte {
-	b := byte(h.class << 6)
+	b := h.class << 6
 	if h.constructed {
 		b |= 0x20
 	}
@@ -388,12 +388,18 @@ func appendHeader(out []byte, h header, length int) []byte {
 			out = append(out, d)
 		}
 	}
-	if length < 0x80 {
-		return append(out, byte(length))
+	if length < 0 {
+		// Unreachable: lengths are byte-slice lengths. Keep the conversion
+		// below total anyway.
+		length = 0
+	}
+	l := uint64(length)
+	if l < 0x80 {
+		return append(out, byte(l))
 	}
 	var lenOctets [8]byte
 	n := 0
-	for l := uint64(length); l > 0; l >>= 8 {
+	for ; l > 0; l >>= 8 {
 		lenOctets[n] = byte(l)
 		n++
 	}
