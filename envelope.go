@@ -62,6 +62,9 @@ type EncryptOptions struct {
 
 // DecryptOptions tunes Decrypt. The zero value is the default profile.
 type DecryptOptions struct {
+	// MaxSize bounds the envelope read from the reader, in bytes; a larger
+	// input is refused with ErrMalformed before parsing. Zero means no bound.
+	MaxSize int64
 	// AllowCBC accepts EnvelopedData whose content is AES-CBC encrypted, for
 	// interoperability with legacy producers. CBC carries no integrity
 	// protection: callers that set this must authenticate the envelope by
@@ -333,7 +336,16 @@ func Decrypt(w io.Writer, envelope io.Reader, cert *x509.Certificate, key crypto
 	if cert == nil || key == nil {
 		return errors.New("cryptomsg: Decrypt needs the recipient certificate and private key")
 	}
-	raw, err := io.ReadAll(envelope)
+	var raw []byte
+	var err error
+	if opts.MaxSize > 0 {
+		raw, err = io.ReadAll(io.LimitReader(envelope, opts.MaxSize+1))
+		if err == nil && int64(len(raw)) > opts.MaxSize {
+			return malformed("envelope", fmt.Errorf("larger than %d bytes", opts.MaxSize))
+		}
+	} else {
+		raw, err = io.ReadAll(envelope)
+	}
 	if err != nil {
 		return err
 	}
@@ -346,27 +358,34 @@ func Decrypt(w io.Writer, envelope io.Reader, cert *x509.Certificate, key crypto
 		return err
 	}
 
+	// Every RecipientInfo naming cert is tried; the first usable one wins and
+	// the last failure is reported when none is.
 	var cek []byte
-	found := false
+	var lastErr error
 	for i := range env.Recipients {
 		ri := &env.Recipients[i]
 		if !ri.ID.matches(cert) {
 			continue
 		}
-		found = true
+		var k []byte
 		switch {
 		case ri.ktri != nil:
-			cek, err = decryptKeyTrans(ri.ktri, cert, key)
+			k, lastErr = decryptKeyTrans(ri.ktri, cert, key)
 		case ri.kari != nil:
-			cek, err = decryptKeyAgree(ri.kari, ri.rek, cert, key)
+			k, lastErr = decryptKeyAgree(ri.kari, ri.rek, cert, key)
+		default:
+			lastErr = &UnsupportedAlgorithmError{OID: ri.Alg, Use: "recipient info"}
 		}
-		if err != nil {
-			return err
+		if lastErr == nil {
+			cek = k
+			break
 		}
-		break
 	}
-	if !found {
-		return ErrNoMatchingRecipient
+	if cek == nil {
+		if lastErr == nil {
+			return ErrNoMatchingRecipient
+		}
+		return lastErr
 	}
 	defer clear(cek)
 
@@ -399,8 +418,12 @@ func decryptContent(env *envelope, cek []byte, opts *DecryptOptions) ([]byte, er
 		if rest, err := asn1.Unmarshal(env.Cipher.Parameters.FullBytes, &params); err != nil || len(rest) != 0 {
 			return nil, malformed("GCMParameters", err)
 		}
-		if len(params.Nonce) < 7 || len(params.Nonce) > 128 || params.ICVLen < 12 || params.ICVLen > 16 {
-			return nil, malformed("GCMParameters", fmt.Errorf("nonce %d bytes, ICV %d bytes", len(params.Nonce), params.ICVLen))
+		// Accepted: the standard 96-bit nonce with a 12–16 byte tag, or any
+		// 7–128 byte nonce with the full 16-byte tag (crypto/cipher sets one
+		// of the two at a time).
+		nonceOK := len(params.Nonce) >= 7 && len(params.Nonce) <= 128
+		if !nonceOK || params.ICVLen < 12 || params.ICVLen > 16 || (len(params.Nonce) != gcmNonceSize && params.ICVLen != gcmTagSize) {
+			return nil, malformed("GCMParameters", fmt.Errorf("nonce %d bytes with ICV %d bytes is outside the profile", len(params.Nonce), params.ICVLen))
 		}
 		if len(env.MAC) != params.ICVLen {
 			return nil, fmt.Errorf("%w: tag length", ErrAuthenticationFailed)
@@ -461,17 +484,12 @@ func decryptContent(env *envelope, cek []byte, opts *DecryptOptions) ([]byte, er
 	return nil, &UnsupportedAlgorithmError{OID: alg, Use: "content encryption"}
 }
 
-// newGCM builds the AEAD for the nonce and tag lengths of the message. The
-// standard library sets one of the two at a time, so either the nonce is the
-// standard 96 bits or the tag is the full 128 bits.
+// newGCM builds the AEAD for lengths already validated by decryptContent.
 func newGCM(block cipher.Block, nonceLen, tagLen int) (cipher.AEAD, error) {
-	switch {
-	case nonceLen == gcmNonceSize:
+	if nonceLen == gcmNonceSize {
 		return cipher.NewGCMWithTagSize(block, tagLen)
-	case tagLen == gcmTagSize:
-		return cipher.NewGCMWithNonceSize(block, nonceLen)
 	}
-	return nil, malformed("GCMParameters", fmt.Errorf("nonce of %d bytes with a %d-byte tag", nonceLen, tagLen))
+	return cipher.NewGCMWithNonceSize(block, nonceLen)
 }
 
 // authAttrsAAD returns the additional authenticated data of RFC 5083 §2.2:
