@@ -56,6 +56,29 @@ without any key, so a caller can report "encrypted for 3 recipients, signed by C
 deciding to decrypt. The `cryptomsg` CLI (`encrypt`, `decrypt`, `sign`, `verify`, `inspect`) is
 a thin wrapper over the library.
 
+## Interoperating with OpenSSL
+
+`openssl cms` defaults to algorithms outside the profile — PKCS#1 v1.5 for RSA recipients,
+the SHA-1 ECDH KDF for EC recipients, no `signingCertificateV2` — and cryptomsg refuses those
+by OID. An OpenSSL producer must ask for the profile's options; a consumer needs only `-binary`
+so nothing is treated as text:
+
+```sh
+# encrypt for cryptomsg (streamed BER is fine; cryptomsg normalises it)
+openssl cms -encrypt -binary -aes-256-gcm -outform DER -in model.zip -out model.zip.p7m \
+  -recip rsa.crt -keyopt rsa_padding_mode:oaep -keyopt rsa_oaep_md:sha256 \
+  -recip ec.crt -keyopt ecdh_kdf_md:sha256      # ecdh_kdf_md:sha384 for P-384
+# sign for cryptomsg (-cades adds the mandatory signingCertificateV2)
+openssl cms -sign -binary -cades -outform DER -signer signer.crt -inkey signer.key \
+  -in model.zip.p7m -out model.zip.p7m.sig
+# open what cryptomsg produced
+openssl cms -decrypt -binary -inform DER -in model.zip.p7m -recip ec.crt -inkey ec.key -out model.zip
+openssl cms -verify -binary -inform DER -in model.zip.p7m.sig -content model.zip.p7m -CAfile ca.crt -out /dev/null
+```
+
+OpenSSL before 3.5 cannot sign with Ed25519 in CMS; verify such signatures with cryptomsg or
+Bouncy Castle.
+
 ## Status
 
 Pre-release; the API may change until `v0.1.0`. See [`CHANGELOG.md`](CHANGELOG.md),
