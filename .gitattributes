@@ -1,0 +1,3 @@
+# Fixtures are byte-exact: never translate line endings on checkout.
+testdata/** -text
+**/testdata/** -text

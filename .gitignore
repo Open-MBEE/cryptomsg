@@ -10,3 +10,6 @@
 /.idea/
 /.vscode/
 *.swp
+
+# Bouncy Castle fixture generator build output
+/interop/bouncycastle/target/
