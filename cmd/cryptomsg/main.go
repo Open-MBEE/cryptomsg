@@ -94,14 +94,14 @@ func openIn(path string, stdin io.Reader) (io.ReadCloser, error) {
 	if path == "" || path == "-" {
 		return io.NopCloser(stdin), nil
 	}
-	return os.Open(path)
+	return os.Open(path) // #nosec G304 -- the path is the operator's own command-line argument
 }
 
 func openOut(path string, stdout io.Writer) (io.WriteCloser, error) {
 	if path == "" || path == "-" {
 		return nopWriteCloser{stdout}, nil
 	}
-	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) // #nosec G304 -- operator's argument
 }
 
 type nopWriteCloser struct{ io.Writer }
@@ -376,7 +376,7 @@ func writeOut(path string, stdout io.Writer, data []byte) error {
 		return err
 	}
 	if _, err := w.Write(data); err != nil {
-		w.Close()
+		_ = w.Close()
 		return err
 	}
 	return w.Close()
@@ -385,7 +385,7 @@ func writeOut(path string, stdout io.Writer, data []byte) error {
 // pemOrDER returns every PEM block of the named type, or the whole file as
 // one DER blob when it is not PEM.
 func pemOrDER(path string, types ...string) ([][]byte, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- the path is the operator's own command-line argument
 	if err != nil {
 		return nil, err
 	}
