@@ -9,6 +9,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `Sign`: SignedData with ECDSA P-256/SHA-256, ECDSA P-384/SHA-384, RSASSA-PSS/SHA-256 and
+  Ed25519 (RFC 8419), attached or detached, with the mandatory content-type, message-digest,
+  signing-time and signingCertificateV2 (ESSCertIDv2) attributes; signature verification
+  that refuses missing attributes, substituted algorithms and certificates.
 - `Encrypt` and `Decrypt`: AuthEnvelopedData with AES-128/256-GCM for RSA (RSA-OAEP SHA-256,
   ≥ 2048 bits) and EC (ephemeral-static ECDH on P-256/P-384, X9.63 KDF, RFC 3394 AES key
   wrap) recipients named by IssuerAndSerialNumber or SubjectKeyIdentifier; EnvelopedData with
