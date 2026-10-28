@@ -84,6 +84,9 @@ func (p *Policy) evaluate(signer *x509.Certificate, carried []*x509.Certificate)
 		intermediates = p.Intermediates.Clone()
 	}
 	for _, c := range carried {
+		if c == nil {
+			continue
+		}
 		if !c.Equal(signer) {
 			intermediates.AddCert(c)
 		}
@@ -130,6 +133,9 @@ func (p *Policy) checkRevocation(chain []*x509.Certificate, at time.Time) error 
 		covered := false
 		var stale *x509.RevocationList
 		for _, crl := range p.CRLs {
+			if crl == nil {
+				continue
+			}
 			if !bytes.Equal(crl.RawIssuer, cert.RawIssuer) || crl.CheckSignatureFrom(issuer) != nil || at.Before(crl.ThisUpdate) {
 				continue
 			}
