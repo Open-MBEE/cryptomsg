@@ -34,6 +34,9 @@ type VerifiedSignature struct {
 	Algorithm string
 	// Certificates are all certificates carried in the SignedData.
 	Certificates []*x509.Certificate
+	// Chain is the validated path from Signer to a trust anchor, set by
+	// Verify only.
+	Chain []*x509.Certificate
 }
 
 // signedMessage is the decoded, key-free view of a SignedData.
