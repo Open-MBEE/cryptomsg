@@ -254,3 +254,62 @@ func TestSortSetOf(t *testing.T) {
 		t.Fatal("zero padding must compare equal")
 	}
 }
+
+func TestNormalizeCanonicalPrimitives(t *testing.T) {
+	cases := []struct{ name, in, want string }{
+		{"boolean true", "010101", "0101ff"},
+		{"boolean false", "010100", "010100"},
+		{"integer redundant zero", "02020001", "020101"},
+		{"integer redundant ff", "0202ff80", "020180"},
+		{"integer sign zero kept", "02020080", "02020080"},
+		{"integer sign ff kept", "0202ff7f", "0202ff7f"},
+		{"integer zero", "020100", "020100"},
+		{"enumerated redundant", "0a020001", "0a0101"},
+		{"context tag untouched", "80020001", "80020001"},
+		{"nested boolean", "3003010101", "30030101ff"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := Normalize(mustHex(t, c.in))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if hex.EncodeToString(got) != c.want {
+				t.Fatalf("got %x want %s", got, c.want)
+			}
+		})
+	}
+	var b bool
+	if rest, err := asn1.Unmarshal(mustHex(t, "0101ff"), &b); err != nil || len(rest) != 0 || !b {
+		t.Fatalf("strict decode of normalised BOOLEAN: %v %v %v", b, rest, err)
+	}
+	var n int
+	if _, err := asn1.Unmarshal(mustHex(t, "020101"), &n); err != nil || n != 1 {
+		t.Fatalf("strict decode of normalised INTEGER: %d %v", n, err)
+	}
+}
+
+func TestNormalizeRejectsStandaloneEOC(t *testing.T) {
+	for _, in := range []string{"0000", "30020000", "0000020101"} {
+		_, err := Normalize(mustHex(t, in))
+		if !errors.Is(err, ErrUnexpectedEOC) {
+			t.Fatalf("%s: got %v, want ErrUnexpectedEOC", in, err)
+		}
+	}
+	// The end marker of an indefinite-length element is still consumed.
+	if _, err := Normalize(mustHex(t, "30800000")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestConstructedStringErrorOffsetInRange(t *testing.T) {
+	in := mustHex(t, "230b2300230023002300020101")
+	_, err := Normalize(in)
+	var se *SyntaxError
+	if !errors.As(err, &se) || !errors.Is(err, ErrConstructedString) {
+		t.Fatalf("got %v, want ErrConstructedString", err)
+	}
+	if se.Offset != 0 {
+		t.Fatalf("offset %d, want 0 (the enclosing BIT STRING)", se.Offset)
+	}
+}
