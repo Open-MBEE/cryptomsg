@@ -9,6 +9,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `cryptomsg` command (`encrypt`, `decrypt`, `sign`, `verify`, `inspect`), a thin wrapper over
+  the library for publishers and interoperability testing.
+- `Verify` with an offline `Policy` (caller-supplied trust anchors, intermediates, CRLs,
+  evaluation time, extended key usages; no network access) and `Parse`, the key-free view of
+  a CMS object (recipients, algorithms, signer certificates).
 - `Sign`: SignedData with ECDSA P-256/SHA-256, ECDSA P-384/SHA-384, RSASSA-PSS/SHA-256 and
   Ed25519 (RFC 8419), attached or detached, with the mandatory content-type, message-digest,
   signing-time and signingCertificateV2 (ESSCertIDv2) attributes; signature verification
