@@ -444,20 +444,27 @@ func TestDecryptAuthAttrsContentType(t *testing.T) {
 	cases := []struct {
 		name    string
 		members []byte
+		is      error
 		want    string
 	}{
-		{"wrong content type", attributeDER(t, oidAttrContentType, oidSignedData), "does not name"},
-		{"no content type", attributeDER(t, other, []byte{1}), "0 content-type attributes"},
-		{"two content types", append(attributeDER(t, oidAttrContentType, oidData), attributeDER(t, oidAttrContentType, oidData)...), "2 content-type attributes"},
+		// Structural violations of RFC 5083 §2.1 are malformed messages, from
+		// Parse as much as from Decrypt: no tag has been checked.
+		{"wrong content type", attributeDER(t, oidAttrContentType, oidSignedData), ErrMalformed, "does not name"},
+		{"no content type", attributeDER(t, other, []byte{1}), ErrMalformed, "0 content-type attributes"},
+		{"two content types", append(attributeDER(t, oidAttrContentType, oidData), attributeDER(t, oidAttrContentType, oidData)...), ErrMalformed, "2 content-type attributes"},
 		// Well-formed attributes pass the check; the tag then fails because
 		// the message was not sealed over them.
-		{"unauthenticated attributes", attributeDER(t, oidAttrContentType, oidData), "cryptomsg: authentication failed"},
+		{"unauthenticated attributes", attributeDER(t, oidAttrContentType, oidData), ErrAuthenticationFailed, "cryptomsg: authentication failed"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := decryptBytes(t, withAuthAttrs(t, env, c.members), id, nil)
-			if !errors.Is(err, ErrAuthenticationFailed) || !strings.Contains(err.Error(), c.want) {
-				t.Fatalf("got %v, want ErrAuthenticationFailed mentioning %q", err, c.want)
+			bad := withAuthAttrs(t, env, c.members)
+			_, err := decryptBytes(t, bad, id, nil)
+			if !errors.Is(err, c.is) || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("got %v, want %v mentioning %q", err, c.is, c.want)
+			}
+			if _, err := parseEnvelope(bad); errors.Is(c.is, ErrMalformed) != errors.Is(err, ErrMalformed) {
+				t.Fatalf("parseEnvelope: %v", err)
 			}
 		})
 	}

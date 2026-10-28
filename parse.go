@@ -163,15 +163,39 @@ func Parse(data io.Reader) (*Info, error) {
 				SignatureAlgorithm:  si.SignatureAlgorithm.Algorithm,
 				HasSignedAttributes: len(si.SignedAttrs.FullBytes) != 0,
 			}
-			for _, c := range msg.Certificates {
-				if id.matches(c) {
-					s.Certificate = c
-					break
-				}
-			}
+			s.Certificate = inspectSignerCertificate(si, id, msg.Certificates)
 			info.Signers = append(info.Signers, s)
 		}
 		return info, nil
 	}
 	return nil, fmt.Errorf("%w: %v", ErrUnsupportedStructure, ci.ContentType)
+}
+
+// inspectSignerCertificate names the carried certificate a SignerInfo is for,
+// without verifying anything. Several certificates can share a key identifier;
+// then the (unverified) first ESSCertIDv2 picks, as Verify does after checking
+// the signature, and nothing is named when it picks none.
+func inspectSignerCertificate(si *signerInfo, id recipientID, carried []*x509.Certificate) *x509.Certificate {
+	var matches []*x509.Certificate
+	for _, c := range carried {
+		if c != nil && id.matches(c) {
+			matches = append(matches, c)
+		}
+	}
+	if len(matches) <= 1 {
+		if len(matches) == 1 {
+			return matches[0]
+		}
+		return nil
+	}
+	attrs, err := parseSignedAttributes(si.SignedAttrs)
+	if err != nil {
+		return nil
+	}
+	for _, c := range matches {
+		if checkSigningCertificate(attrs, c) == nil {
+			return c
+		}
+	}
+	return nil
 }
